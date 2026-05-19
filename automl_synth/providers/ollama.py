@@ -62,3 +62,21 @@ class OllamaProvider(LLMProvider):
                 return resp.status_code == 200
         except Exception:
             return False
+
+    async def list_models(self) -> list[dict[str, str]]:
+        """List available models from Ollama."""
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{self.base_url}/api/tags")
+                resp.raise_for_status()
+                data = resp.json()
+                models = []
+                for m in data.get("models", []):
+                    models.append({
+                        "id": m.get("name", ""),
+                        "name": m.get("name", ""),
+                        "context_length": "N/A",
+                    })
+                return models
+        except Exception:
+            return []

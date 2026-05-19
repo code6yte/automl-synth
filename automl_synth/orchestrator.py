@@ -68,7 +68,7 @@ async def run_pipeline(
         files["jsonl"] = jsonl_path
 
     if "pdf" in formats:
-        pdf_path = export_pdf(cleaned_rows, research, quality, str(base_name.with_suffix("-card.pdf")))
+        pdf_path = export_pdf(cleaned_rows, research, quality, str(out_path / "dataset-card.pdf"))
         files["pdf"] = pdf_path
 
     if "json" in formats:

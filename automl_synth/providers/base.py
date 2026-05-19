@@ -33,3 +33,7 @@ class LLMProvider(ABC):
     async def check_reachability(self) -> bool:
         """Check if the provider endpoint is reachable."""
         ...
+
+    async def list_models(self) -> list[dict[str, str]]:
+        """List available models. Returns empty list if not supported."""
+        return []

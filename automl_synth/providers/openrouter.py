@@ -69,3 +69,28 @@ class OpenRouterProvider(LLMProvider):
                 return resp.status_code == 200
         except Exception:
             return False
+
+    async def list_models(self) -> list[dict[str, str]]:
+        """List available models from OpenRouter."""
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(
+                    f"{self.base_url}/models",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "HTTP-Referer": "https://automl-synth.local",
+                        "X-Title": "AutoML-Synth",
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                models = []
+                for m in data.get("data", []):
+                    models.append({
+                        "id": m.get("id", ""),
+                        "name": m.get("name", m.get("id", "")),
+                        "context_length": m.get("context_length", "N/A"),
+                    })
+                return models
+        except Exception:
+            return []

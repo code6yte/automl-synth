@@ -10,6 +10,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.table import Table
 
 from automl_synth.config import load_config, validate_config
 from automl_synth.providers.factory import create_provider
@@ -23,6 +24,52 @@ app = typer.Typer(
 
 
 @app.command()
+def models(
+    provider: str = typer.Option(None, "--provider", "-p", help="LLM provider"),
+):
+    """List available models from the configured provider."""
+    cfg = load_config(provider=provider)
+    provider_instance = create_provider(
+        provider_type=cfg["provider"],
+        api_key=cfg["api_key"],
+        model=cfg["model"],
+        base_url=cfg["base_url"],
+    )
+
+    console.print(f"[bold]Fetching models from {cfg['provider']}...[/bold]")
+
+    async def _fetch():
+        return await provider_instance.list_models()
+
+    try:
+        model_list = asyncio.run(_fetch())
+    except Exception as e:
+        console.print(f"[red]Failed to fetch models:[/red] {e}")
+        raise typer.Exit(code=2)
+
+    if not model_list:
+        console.print("[yellow]No models found or provider does not support listing.[/yellow]")
+        raise typer.Exit(code=0)
+
+    table = Table(title=f"Available Models ({cfg['provider']})")
+    table.add_column("#", style="dim")
+    table.add_column("ID", style="cyan")
+    table.add_column("Name", style="green")
+    table.add_column("Context", style="dim")
+
+    for i, m in enumerate(model_list, 1):
+        table.add_row(
+            str(i),
+            m["id"],
+            m["name"],
+            str(m.get("context_length", "N/A")),
+        )
+
+    console.print(table)
+    console.print("\n[dim]Use --model <id> to select a model[/dim]")
+
+
+@app.command()
 def generate(
     topic: str = typer.Option(..., "--topic", "-t", help="Topic for dataset generation"),
     rows: int = typer.Option(300, "--rows", "-r", help="Number of rows to generate"),
@@ -31,6 +78,8 @@ def generate(
     seed: int = typer.Option(42, "--seed", "-s", help="Random seed"),
     provider: str = typer.Option(None, "--provider", "-p", help="LLM provider"),
     model: str = typer.Option(None, "--model", "-m", help="LLM model"),
+    list_models: bool = typer.Option(False, "--list-models", help="List available models and exit"),
+    interactive: bool = typer.Option(False, "--interactive", "-i", help="Interactive model selection"),
     no_search: bool = typer.Option(False, "--no-search", help="Disable web search"),
     format: str = typer.Option("csv,jsonl,pdf,json", "--format", "-f", help="Output formats"),
 ):
@@ -43,19 +92,88 @@ def generate(
             console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(code=1)
 
-    label_list = [lbl.strip() for lbl in labels.split(",")] if labels else None
-    if label_list and len(label_list) > 6:
-        console.print("[red]Error:[/red] Maximum 6 labels allowed")
-        raise typer.Exit(code=1)
-
-    formats = [f.strip() for f in format.split(",")]
-
     provider_instance = create_provider(
         provider_type=cfg["provider"],
         api_key=cfg["api_key"],
         model=cfg["model"],
         base_url=cfg["base_url"],
     )
+
+    if list_models:
+        console.print(f"[bold]Fetching models from {cfg['provider']}...[/bold]")
+
+        async def _fetch():
+            return await provider_instance.list_models()
+
+        try:
+            model_list = asyncio.run(_fetch())
+        except Exception as e:
+            console.print(f"[red]Failed to fetch models:[/red] {e}")
+            raise typer.Exit(code=2)
+
+        if not model_list:
+            console.print("[yellow]No models found.[/yellow]")
+            raise typer.Exit(code=0)
+
+        table = Table(title=f"Available Models ({cfg['provider']})")
+        table.add_column("#", style="dim")
+        table.add_column("ID", style="cyan")
+        table.add_column("Name", style="green")
+        table.add_column("Context", style="dim")
+
+        for i, m in enumerate(model_list, 1):
+            table.add_row(
+                str(i),
+                m["id"],
+                m["name"],
+                str(m.get("context_length", "N/A")),
+            )
+
+        console.print(table)
+        raise typer.Exit(code=0)
+
+    if interactive:
+        console.print(f"[bold]Fetching available models from {cfg['provider']}...[/bold]")
+
+        async def _fetch():
+            return await provider_instance.list_models()
+
+        try:
+            model_list = asyncio.run(_fetch())
+        except Exception as e:
+            console.print(f"[red]Failed to fetch models:[/red] {e}")
+            raise typer.Exit(code=2)
+
+        if model_list:
+            table = Table(title="Select a model")
+            table.add_column("#", style="dim")
+            table.add_column("ID", style="cyan")
+            table.add_column("Name", style="green")
+
+            for i, m in enumerate(model_list, 1):
+                table.add_row(str(i), m["id"], m["name"])
+
+            console.print(table)
+
+            choice = console.input(f"\nSelect model (1-{len(model_list)}, or press Enter for default): ").strip()
+            if choice and choice.isdigit():
+                idx = int(choice) - 1
+                if 0 <= idx < len(model_list):
+                    cfg["model"] = model_list[idx]["id"]
+                    provider_instance = create_provider(
+                        provider_type=cfg["provider"],
+                        api_key=cfg["api_key"],
+                        model=cfg["model"],
+                        base_url=cfg["base_url"],
+                    )
+                    console.print(f"[green]Selected: {model_list[idx]['id']}[/green]\n")
+
+    label_list = [lbl.strip() for lbl in labels.split(",")] if labels else None
+    if label_list and len(label_list) > 6:
+        console.print("[red]Error:[/red] Maximum 6 labels allowed")
+        raise typer.Exit(code=1)
+
+    formats = [f.strip() for f in format.split(",")]
 
     async def _run():
         from automl_synth.orchestrator import run_pipeline
@@ -88,6 +206,7 @@ def generate(
     console.print(Panel(
         f"[green]Dataset generated successfully![/green]\n\n"
         f"Topic: {result.topic}\n"
+        f"Model: {cfg['model']}\n"
         f"Rows: {result.quality_report.total_rows}\n"
         f"Quality: {result.quality_report.quality_score}/100 ({result.quality_report.quality_grade})\n"
         f"Output: {result.output_dir}\n\n"
