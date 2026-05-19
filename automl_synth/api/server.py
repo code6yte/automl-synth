@@ -133,6 +133,15 @@ async def config_status():
     }
 
 
-_dashboard_dir = Path(__file__).parent / "dashboard" / "dist"
-if _dashboard_dir.exists():
+_dashboard_dir = Path(__file__).parent.parent / "dashboard" / "dist"
+if _dashboard_dir.exists() and (_dashboard_dir / "index.html").exists():
     app.mount("/", StaticFiles(directory=str(_dashboard_dir), html=True), name="dashboard")
+else:
+    @app.get("/")
+    async def root():
+        return {
+            "message": "AutoML-Synth API",
+            "version": __version__,
+            "docs": "/docs",
+            "health": "/api/health",
+        }

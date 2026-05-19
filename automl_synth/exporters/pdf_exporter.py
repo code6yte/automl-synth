@@ -27,8 +27,9 @@ def _safe(text: str) -> str:
 def _wrap_text(text: str, max_len: int = 200) -> Paragraph:
     """Create a Paragraph with proper text wrapping."""
     escaped = _safe(text[:max_len])
+    escaped = escaped.replace("\n", "<br/>")
     if len(text) > max_len:
-        escaped += "..."
+        escaped = escaped.rstrip("...") + "..."
     return Paragraph(escaped, getSampleStyleSheet()["Normal"])
 
 
