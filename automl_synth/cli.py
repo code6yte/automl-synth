@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -22,13 +23,87 @@ app = typer.Typer(
     add_completion=False,
 )
 
+PROVIDER_MAP = {
+    "openrouter": {
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key_env": "OPENROUTER_API_KEY",
+    },
+    "groq": {
+        "base_url": "https://api.groq.com/openai/v1",
+        "api_key_env": "GROQ_API_KEY",
+    },
+    "cerebras": {
+        "base_url": "https://api.cerebras.ai/v1",
+        "api_key_env": "CEREBRAS_API_KEY",
+    },
+    "deepinfra": {
+        "base_url": "https://api.deepinfra.com/v1/openai",
+        "api_key_env": "DEEPINFRA_API_KEY",
+    },
+    "fireworks": {
+        "base_url": "https://api.fireworks.ai/inference/v1",
+        "api_key_env": "FIREWORKS_API_KEY",
+    },
+    "sambanova": {
+        "base_url": "https://api.sambanova.ai/v1",
+        "api_key_env": "SAMBANOVA_API_KEY",
+    },
+    "nvidia": {
+        "base_url": "https://integrate.api.nvidia.com/v1",
+        "api_key_env": "NVIDIA_API_KEY",
+    },
+    "ollama": {
+        "base_url": "http://localhost:11434",
+        "api_key_env": "",
+    },
+}
+
+
+def detect_provider_from_model(model_id: str) -> tuple[str, str, str]:
+    """Detect provider from model ID prefix. Returns (provider_type, base_url, api_key)."""
+    model_lower = model_id.lower()
+    prefix = model_lower.split("/")[0] if "/" in model_lower else model_lower
+
+    provider_configs = {
+        "groq": ("openai_compatible", "https://api.groq.com/openai/v1", "GROQ_API_KEY"),
+        "cerebras": ("openai_compatible", "https://api.cerebras.ai/v1", "CEREBRAS_API_KEY"),
+        "deepinfra": ("openai_compatible", "https://api.deepinfra.com/v1/openai", "DEEPINFRA_API_KEY"),
+        "fireworks": ("openai_compatible", "https://api.fireworks.ai/inference/v1", "FIREWORKS_API_KEY"),
+        "sambanova": ("openai_compatible", "https://api.sambanova.ai/v1", "SAMBANOVA_API_KEY"),
+        "nvidia": ("openai_compatible", "https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY"),
+        "openai": ("openai_compatible", "https://api.openai.com/v1", "OPENAI_API_KEY"),
+        "anthropic": ("openai_compatible", "https://api.anthropic.com/v1", "ANTHROPIC_API_KEY"),
+        "qwen": ("openai_compatible", "https://dashscope.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY"),
+        "z-ai": ("openai_compatible", "https://api.deepinfra.com/v1/openai", "DEEPINFRA_API_KEY"),
+        "google": ("openai_compatible", "https://generativelanguage.googleapis.com/v1beta/openai", "GOOGLE_API_KEY"),
+        "meta-llama": ("openai_compatible", "https://api.deepinfra.com/v1/openai", "DEEPINFRA_API_KEY"),
+        "mistralai": ("openai_compatible", "https://api.mistral.ai/v1", "MISTRAL_API_KEY"),
+        "deepseek": ("openai_compatible", "https://api.deepseek.com/v1", "DEEPSEEK_API_KEY"),
+        "moonshotai": ("openai_compatible", "https://api.moonshot.cn/v1", "MOONSHOT_API_KEY"),
+        "minimax": ("openai_compatible", "https://api.minimax.chat/v1", "MINIMAX_API_KEY"),
+    }
+
+    if prefix in provider_configs:
+        ptype, base_url, env_key = provider_configs[prefix]
+        api_key = os.environ.get(env_key, "")
+        return ptype, base_url, api_key
+
+    return "", "", ""
+
 
 @app.command()
 def models(
     provider: str = typer.Option(None, "--provider", "-p", help="LLM provider"),
+    base_url: str = typer.Option(None, "--base-url", "-u", help="Provider API base URL"),
+    api_key: str = typer.Option(None, "--api-key", "-k", help="API key"),
 ):
     """List available models from the configured provider."""
     cfg = load_config(provider=provider)
+    if base_url:
+        cfg["base_url"] = base_url
+    if api_key:
+        cfg["api_key"] = api_key
+
     provider_instance = create_provider(
         provider_type=cfg["provider"],
         api_key=cfg["api_key"],
@@ -76,8 +151,11 @@ def generate(
     out: str = typer.Option("./output", "--out", "-o", help="Output directory"),
     labels: str = typer.Option(None, "--labels", "-l", help="Comma-separated labels (max 6)"),
     seed: int = typer.Option(42, "--seed", "-s", help="Random seed"),
-    provider: str = typer.Option(None, "--provider", "-p", help="LLM provider"),
-    model: str = typer.Option(None, "--model", "-m", help="LLM model"),
+    provider: str = typer.Option(None, "--provider", "-p", help="LLM provider (openrouter, groq, cerebras, deepinfra, fireworks, sambanova, nvidia, ollama)"),
+    model: str = typer.Option(None, "--model", "-m", help="LLM model ID"),
+    base_url: str = typer.Option(None, "--base-url", "-u", help="Override API base URL"),
+    api_key: str = typer.Option(None, "--api-key", "-k", help="Override API key"),
+    auto_provider: bool = typer.Option(True, "--auto-provider/--no-auto", help="Auto-detect provider from model ID prefix"),
     list_models: bool = typer.Option(False, "--list-models", help="List available models and exit"),
     interactive: bool = typer.Option(False, "--interactive", "-i", help="Interactive model selection"),
     no_search: bool = typer.Option(False, "--no-search", help="Disable web search"),
@@ -85,6 +163,23 @@ def generate(
 ):
     """Generate a synthetic text classification dataset."""
     cfg = load_config(provider=provider, model=model)
+
+    if auto_provider and model:
+        detected_type, detected_url, detected_key = detect_provider_from_model(model)
+        if detected_type and cfg["provider"] != "openrouter":
+            cfg["provider"] = detected_type
+            if detected_url:
+                cfg["base_url"] = detected_url
+            if detected_key:
+                cfg["api_key"] = detected_key
+            console.print(f"[dim]Auto-detected provider: {cfg['provider']} ({cfg['base_url']})[/dim]")
+        elif detected_type and cfg["provider"] == "openrouter":
+            console.print(f"[dim]Using OpenRouter for model {model}[/dim]")
+
+    if base_url:
+        cfg["base_url"] = base_url
+    if api_key:
+        cfg["api_key"] = api_key
 
     errors = validate_config(cfg)
     if errors:
@@ -206,6 +301,7 @@ def generate(
     console.print(Panel(
         f"[green]Dataset generated successfully![/green]\n\n"
         f"Topic: {result.topic}\n"
+        f"Provider: {cfg['provider']} ({cfg['base_url']})\n"
         f"Model: {cfg['model']}\n"
         f"Rows: {result.quality_report.total_rows}\n"
         f"Quality: {result.quality_report.quality_score}/100 ({result.quality_report.quality_grade})\n"
