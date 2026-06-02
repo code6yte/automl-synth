@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import random
 
+from automl_synth.models.ngram import train_from_snippets
 from automl_synth.providers.base import LLMProvider
+from automl_synth.search import search_web
 from automl_synth.types import GeneratedRow, ResearchReport
 
 
@@ -175,3 +177,70 @@ def _fallback_text(topic: str, label: str, difficulty: str) -> str:
         f"An example related to {topic} with {label} classification.",
     ]
     return random.choice(templates)
+
+
+def generate_dataset_local(
+    research: ResearchReport,
+    num_rows: int = 300,
+    seed: int = 42,
+    max_search_results: int = 10,
+) -> list[GeneratedRow]:
+    """Generate dataset using local ngram model trained on web search snippets."""
+    rng = random.Random(seed)
+    results = search_web(research.topic, max_results=max_search_results)
+    snippets = [r.snippet for r in results if r.snippet]
+
+    if not snippets:
+        snippets = [f"Information about {research.topic}"]
+
+    model = train_from_snippets(snippets, seed=seed)
+
+    rows: list[GeneratedRow] = []
+    labels = research.labels
+    difficulties = research.difficulty_levels
+
+    rows_per_label = num_rows // len(labels)
+    remainder = num_rows - (rows_per_label * len(labels))
+
+    label_counts = {label: rows_per_label for label in labels}
+    for i in range(remainder):
+        label_counts[labels[i % len(labels)]] += 1
+
+    row_id = 1
+    for label, count in label_counts.items():
+        for _ in range(count):
+            difficulty = rng.choice(difficulties)
+            seed_word_raw = model.start_ngrams[rng.randint(0, len(model.start_ngrams) - 1)] if model.start_ngrams else [label.lower()]
+            if isinstance(seed_word_raw, tuple):
+                seed_list = list(seed_word_raw)
+            else:
+                seed_list = seed_word_raw if isinstance(seed_word_raw, list) else [seed_word_raw]
+
+            text = model.generate(
+                min_words=10,
+                max_words=40,
+                seed_words=seed_list,
+            )
+
+            if not text or len(text.split()) < 5:
+                text = f"{research.topic} related content about {label} with {difficulty} complexity."
+
+            score = _compute_row_score(text, difficulty)
+            rows.append(
+                GeneratedRow(
+                    id=row_id,
+                    text=text,
+                    label=label,
+                    topic=research.topic,
+                    source_agent="generator_local",
+                    difficulty=difficulty,
+                    synthetic_quality_score=score,
+                )
+            )
+            row_id += 1
+
+    rng.shuffle(rows)
+    for i, row in enumerate(rows):
+        row.id = i + 1
+
+    return rows[:num_rows]

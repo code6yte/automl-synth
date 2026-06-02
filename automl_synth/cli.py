@@ -158,6 +158,7 @@ def generate(
     auto_provider: bool = typer.Option(True, "--auto-provider/--no-auto", help="Auto-detect provider from model ID prefix"),
     list_models: bool = typer.Option(False, "--list-models", help="List available models and exit"),
     interactive: bool = typer.Option(False, "--interactive", "-i", help="Interactive model selection"),
+    local: bool = typer.Option(False, "--local", "-L", help="Use local ngram model (no LLM API needed)"),
     no_search: bool = typer.Option(False, "--no-search", help="Disable web search"),
     format: str = typer.Option("csv,jsonl,pdf,json", "--format", "-f", help="Output formats"),
 ):
@@ -270,39 +271,61 @@ def generate(
 
     formats = [f.strip() for f in format.split(",")]
 
-    async def _run():
-        from automl_synth.orchestrator import run_pipeline
+    if local:
+        console.print("[bold]Using local ngram model (no LLM API required)[/bold]")
+        from automl_synth.orchestrator import run_pipeline_local
 
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             console=console,
         ) as progress:
-            progress.add_task(description="Starting generation...", total=None)
-            result = await run_pipeline(
-                provider=provider_instance,
+            progress.add_task(description="Generating with local model...", total=None)
+            result = run_pipeline_local(
                 topic=topic,
                 num_rows=rows,
                 labels=label_list,
                 seed=seed,
                 output_dir=out,
-                search_enabled=not no_search,
                 max_search_results=cfg["max_search_results"],
                 formats=formats,
             )
-            return result
+    else:
+        async def _run():
+            from automl_synth.orchestrator import run_pipeline
 
-    try:
-        result = asyncio.run(_run())
-    except Exception as e:
-        console.print(f"[red]Generation failed:[/red] {e}")
-        raise typer.Exit(code=3)
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+            ) as progress:
+                progress.add_task(description="Starting generation...", total=None)
+                result = await run_pipeline(
+                    provider=provider_instance,
+                    topic=topic,
+                    num_rows=rows,
+                    labels=label_list,
+                    seed=seed,
+                    output_dir=out,
+                    search_enabled=not no_search,
+                    max_search_results=cfg["max_search_results"],
+                    formats=formats,
+                )
+                return result
 
+        try:
+            result = asyncio.run(_run())
+        except Exception as e:
+            console.print(f"[red]Generation failed:[/red] {e}")
+            raise typer.Exit(code=3)
+
+    provider_label = "local" if local else f"{cfg['provider']} ({cfg['base_url']})"
+    model_label = "ngram" if local else cfg.get("model", "default")
     console.print(Panel(
         f"[green]Dataset generated successfully![/green]\n\n"
         f"Topic: {result.topic}\n"
-        f"Provider: {cfg['provider']} ({cfg['base_url']})\n"
-        f"Model: {cfg['model']}\n"
+        f"Provider: {provider_label}\n"
+        f"Model: {model_label}\n"
         f"Rows: {result.quality_report.total_rows}\n"
         f"Quality: {result.quality_report.quality_score}/100 ({result.quality_report.quality_grade})\n"
         f"Output: {result.output_dir}\n\n"
