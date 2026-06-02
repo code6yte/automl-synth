@@ -13,6 +13,7 @@ from automl_synth.agents.research_agent import research_topic, research_topic_lo
 from automl_synth.exporters.csv_exporter import export_csv
 from automl_synth.exporters.jsonl_exporter import export_jsonl
 from automl_synth.exporters.pdf_exporter import export_pdf
+from automl_synth.models.training_cache import append_rows
 from automl_synth.providers.base import LLMProvider
 from automl_synth.types import GenerationResult
 
@@ -126,6 +127,7 @@ def run_pipeline_local(
     output_dir: str = "./output",
     max_search_results: int = 10,
     formats: list[str] | None = None,
+    cache_dir: str | None = None,
 ) -> GenerationResult:
     """Run the full dataset generation pipeline using local ngram model (no LLM)."""
     run_id = str(uuid.uuid4())[:8]
@@ -151,9 +153,13 @@ def run_pipeline_local(
         num_rows=num_rows,
         seed=seed,
         max_search_results=max_search_results,
+        cache_dir=cache_dir,
     )
 
     cleaned_rows = clean_dataset(raw_rows)
+
+    if cache_dir:
+        append_rows(cleaned_rows, cache_dir)
 
     quality = analyze_quality(cleaned_rows)
 

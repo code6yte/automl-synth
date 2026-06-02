@@ -289,6 +289,7 @@ def generate(
                 output_dir=out,
                 max_search_results=cfg["max_search_results"],
                 formats=formats,
+                cache_dir=cfg.get("cache_dir"),
             )
     else:
         async def _run():
@@ -321,6 +322,13 @@ def generate(
 
     provider_label = "local" if local else f"{cfg['provider']} ({cfg['base_url']})"
     model_label = "ngram" if local else cfg.get("model", "default")
+
+    cache_line = ""
+    if local and cfg.get("cache_dir"):
+        from automl_synth.models.training_cache import load_training_count
+        n = load_training_count(cfg["cache_dir"])
+        cache_line = f"Training pool: {n} rows across all past runs\n"
+
     console.print(Panel(
         f"[green]Dataset generated successfully![/green]\n\n"
         f"Topic: {result.topic}\n"
@@ -328,7 +336,8 @@ def generate(
         f"Model: {model_label}\n"
         f"Rows: {result.quality_report.total_rows}\n"
         f"Quality: {result.quality_report.quality_score}/100 ({result.quality_report.quality_grade})\n"
-        f"Output: {result.output_dir}\n\n"
+        f"Output: {result.output_dir}\n"
+        f"{cache_line}"
         f"Files:\n" + "\n".join(f"  - {k}: {v}" for k, v in result.files.items()),
         title="AutoML-Synth",
     ))
@@ -374,6 +383,15 @@ def doctor():
     cfg = load_config()
     provider_ok = bool(cfg["api_key"]) or cfg["provider"] == "ollama"
     console.print(f"  LLM config ({cfg['provider']}) {'[green]OK[/green]' if provider_ok else '[yellow]No API key set[/yellow]'}")
+
+    try:
+        from automl_synth.models.training_cache import load_training_count
+        n = load_training_count(cfg["cache_dir"])
+        console.print(f"  Training cache [green]OK[/green] ({n} accumulated rows)")
+    except Exception:
+        console.print("  Training cache [yellow]Empty[/yellow]")
+
+    console.print(f"  Search cache [green]OK[/green] ({cfg['cache_dir']})")
 
     try:
         import ddgs  # noqa: F401

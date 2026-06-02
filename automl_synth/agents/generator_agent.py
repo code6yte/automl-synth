@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import random
 
-from automl_synth.models.ngram import train_from_snippets
+from automl_synth.models.ngram import HybridTextModel, train_from_snippets
+from automl_synth.models.training_cache import load_training_texts
 from automl_synth.providers.base import LLMProvider
+from automl_synth.search.search_cache import get_seed_keywords, save_search_cache
 from automl_synth.search import search_web
 from automl_synth.types import GeneratedRow, ResearchReport
 
@@ -184,16 +186,32 @@ def generate_dataset_local(
     num_rows: int = 300,
     seed: int = 42,
     max_search_results: int = 10,
+    cache_dir: str | None = None,
 ) -> list[GeneratedRow]:
-    """Generate dataset using local ngram model trained on web search snippets."""
+    """Generate dataset using local model trained on accumulated dataset rows.
+
+    - First run: trains on search snippets (fallback), saves results
+    - Subsequent runs: trains on ALL previously generated rows from any topic
+    - Topic relevance comes from seed keywords extracted from cached search results
+    """
     rng = random.Random(seed)
+
     results = search_web(research.topic, max_results=max_search_results)
     snippets = [r.snippet for r in results if r.snippet]
+
+    if cache_dir:
+        save_search_cache(research.topic, results, cache_dir)
 
     if not snippets:
         snippets = [f"Information about {research.topic}"]
 
-    model = train_from_snippets(snippets, seed=seed)
+    prior_texts = load_training_texts(cache_dir) if cache_dir else []
+
+    if prior_texts:
+        model = HybridTextModel(n=3, n_components=50, seed=seed)
+        model.train(prior_texts)
+    else:
+        model = train_from_snippets(snippets, seed=seed)
 
     rows: list[GeneratedRow] = []
     labels = research.labels
@@ -206,24 +224,31 @@ def generate_dataset_local(
     for i in range(remainder):
         label_counts[labels[i % len(labels)]] += 1
 
+    seed_keywords = (
+        get_seed_keywords(research.topic, cache_dir, top_k=10)
+        if cache_dir
+        else [research.topic.lower()]
+    )
+
     row_id = 1
     for label, count in label_counts.items():
         for _ in range(count):
             difficulty = rng.choice(difficulties)
-            seed_word_raw = model.start_ngrams[rng.randint(0, len(model.start_ngrams) - 1)] if model.start_ngrams else [label.lower()]
-            if isinstance(seed_word_raw, tuple):
-                seed_list = list(seed_word_raw)
-            else:
-                seed_list = seed_word_raw if isinstance(seed_word_raw, list) else [seed_word_raw]
+
+            temp_map = {"easy": 0.5, "medium": 0.8, "hard": 1.2}
+            temperature = temp_map.get(difficulty, 0.8)
+
+            seed_list = [label.lower()] + seed_keywords[:3]
 
             text = model.generate(
                 min_words=10,
                 max_words=40,
                 seed_words=seed_list,
+                temperature=temperature,
             )
 
             if not text or len(text.split()) < 5:
-                text = f"{research.topic} related content about {label} with {difficulty} complexity."
+                text = _fallback_text(research.topic, label, difficulty)
 
             score = _compute_row_score(text, difficulty)
             rows.append(
